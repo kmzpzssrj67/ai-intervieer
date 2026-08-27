@@ -1,2 +1,2 @@
-"""Placeholder package for the future reusable TTS flow from Bluye."""
+"""Placeholder package for the future reusable TTS flow."""
 

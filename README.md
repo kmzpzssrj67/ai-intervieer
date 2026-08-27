@@ -1,12 +1,12 @@
-﻿# AI Technical Interviewer
+# AI Technical Interviewer
 
-AI Technical Interviewer is a local full-stack prototype for running a hands-free, adaptive Python technical interview. The app asks a question, listens to the candidate through the Bluye voice pipeline, submits the final transcript to FastAPI, evaluates the answer with Gemini, and advances through a five-question interview until a final assessment is produced.
+AI Technical Interviewer is a local full-stack prototype for running a hands-free, adaptive Python technical interview. The app asks a question, listens to the candidate through the voice pipeline, submits the final transcript to FastAPI, evaluates the answer with Gemini, and advances through a five-question interview until a final assessment is produced.
 
 ## What Is Included
 
 - `backend/` - FastAPI interview backend, database models, schemas, and service logic.
-- `frontend/` - Next.js interview UI, avatar video state renderer, API clients, and Bluye voice adapter.
-- `docs/` - Notes about which Bluye patterns were inspected or reused.
+- `frontend/` - Next.js interview UI, avatar video state renderer, API clients, and voice adapter.
+- `docs/` - Architecture and implementation notes.
 - `frontend/public/` - Avatar videos used by the UI.
 - `.env.example` - Safe environment variable template with no secrets.
 
@@ -18,16 +18,16 @@ Local runtime files are intentionally ignored: `.env`, virtualenvs, logs, SQLite
 2. User enters a candidate name and launches the interview.
 3. Frontend calls `POST /api/interview/start` on the interviewer backend.
 4. Backend creates an interview record and returns question 1.
-5. Frontend requests Bluye Edge TTS from `POST http://localhost:8080/tts` and plays the question audio.
+5. Frontend requests TTS from `POST http://localhost:8080/tts` and plays the question audio.
 6. Avatar switches to `speaking` when audio playback actually starts.
 7. When audio ends, avatar switches to `listening`.
-8. `BluyeInterviewVoiceController` captures mic audio using the Bluye VAD lifecycle.
-9. Bluye VAD detects speech start, tracks audio frames, freezes the silence window when speech stops, and sends final PCM audio to Bluye `/ws/chat`.
-10. Bluye backend transcribes the audio and returns a final `transcript` websocket message.
+8. `InterviewVoiceController` captures mic audio using the VAD lifecycle.
+9. VAD detects speech start, tracks audio frames, freezes the silence window when speech stops, and sends final PCM audio to `/ws/chat`.
+10. Voice backend transcribes the audio and returns a final `transcript` websocket message.
 11. Frontend locks the transcript so the answer can only submit once.
 12. Frontend calls `POST /api/interview/{interview_id}/answer`.
 13. Backend evaluates the answer, records the turn, and either returns `next_question` or marks the assessment available.
-14. If `next_question` exists, frontend updates the question, speaks it through Bluye TTS, then resumes listening.
+14. If `next_question` exists, frontend updates the question, speaks it through TTS, then resumes listening.
 15. On the final question, frontend fetches `GET /api/interview/{interview_id}/assessment` and displays the report.
 
 ## Services And Ports
@@ -36,7 +36,7 @@ Local runtime files are intentionally ignored: `.env`, virtualenvs, logs, SQLite
 | --- | --- | --- |
 | Interviewer backend | `http://127.0.0.1:8000` | Interview state, question generation, answer evaluation, assessment |
 | Interviewer frontend | `http://localhost:3000` | Candidate UI, avatar, TTS playback, interview orchestration |
-| Bluye backend | `http://localhost:8080` | Existing Bluye voice services: `/tts` and `/ws/chat` STT transcript flow |
+| Voice backend | `http://localhost:8080` | Voice services: `/tts` and `/ws/chat` STT transcript flow |
 
 ## Backend Architecture
 
@@ -68,24 +68,24 @@ The frontend is a Next.js App Router app under `frontend/`.
 Important frontend files:
 
 - `frontend/app/page.tsx` - interview state machine and UI orchestration.
-- `frontend/components/BluyeInterviewVoiceController.tsx` - Bluye-style mic/VAD/STT adapter.
+- `frontend/components/InterviewVoiceController.tsx` - mic/VAD/STT adapter.
 - `frontend/components/Avatar.tsx` - state-based avatar video renderer.
 - `frontend/services/interviewApi.ts` - API client for interview backend endpoints.
 - `frontend/public/*.mp4` - avatar state videos.
 
-## Bluye Voice Integration
+## Voice Integration
 
-The interviewer does not use browser `SpeechRecognition`. It reuses the Bluye voice pattern:
+The interviewer does not use browser `SpeechRecognition`. It uses a dedicated voice pipeline:
 
 - Browser mic is opened with `navigator.mediaDevices.getUserMedia`.
 - Audio is processed through `AudioContext` and `ScriptProcessorNode`.
 - RMS thresholds detect speech start and silence.
-- Speech frames are buffered until Bluye's VAD endpointing says the user stopped speaking.
-- Final PCM is sent to Bluye `/ws/chat` as `audio_pcm16`.
-- Bluye returns a final `transcript` message.
+- Speech frames are buffered until VAD endpointing says the user stopped speaking.
+- Final PCM is sent to `/ws/chat` as `audio_pcm16`.
+- The voice service returns a final `transcript` message.
 - The interviewer submits that transcript once to its own FastAPI answer endpoint.
 
-This avoids duplicate speech recognition systems and keeps Bluye as the source of truth for the voice lifecycle.
+This avoids duplicate speech recognition systems and keeps the voice service as the source of truth for the voice lifecycle.
 
 ## Avatar Videos
 
@@ -117,19 +117,19 @@ Frontend variables:
 
 ```env
 NEXT_PUBLIC_INTERVIEW_API_BASE=http://127.0.0.1:8000
-NEXT_PUBLIC_BLUYE_API=http://localhost:8080
+NEXT_PUBLIC_VOICE_API=http://localhost:8080
 ```
 
 Security note: real Gemini/GCP keys must stay only in local `.env` files or deployment secret stores. This public repo should contain no secrets.
 
 ## Running Locally
 
-### 1. Start Bluye Backend
+### 1. Start Voice Backend
 
-The voice adapter expects the existing Bluye API server on port `8080`:
+The voice adapter expects the voice API server on port `8080`:
 
 ```powershell
-cd D:\Bluye\backend
+cd D:\voice-backend
 python api_server.py
 ```
 

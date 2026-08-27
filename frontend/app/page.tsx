@@ -1,8 +1,8 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Avatar, { type AvatarState } from "@/components/Avatar";
-import BluyeInterviewVoiceController from "@/components/BluyeInterviewVoiceController";
+import InterviewVoiceController from "@/components/InterviewVoiceController";
 import * as api from "@/services/interviewApi";
 
 type Status = "setup" | "active" | "completed";
@@ -47,29 +47,29 @@ export default function Page() {
     speechAudioRef.current?.pause();
     setAvatarState("thinking");
 
-    const resumeBluyeListening = () => {
+    const resumeVoiceListening = () => {
       if (statusRef.current !== "active" || isSubmittingAnswerRef.current) return;
       setCandidateAnswer("");
       setAvatarState("listening");
     };
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_BLUYE_API ?? "http://localhost:8080"}/tts`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8080"}/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, turn_id: `INTERVIEW-TTS-${Date.now()}` }),
       });
-      if (!res.ok) throw new Error(`Bluye TTS failed: ${res.status}`);
+      if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
       const blob = await res.blob();
       const audio = new Audio(URL.createObjectURL(blob));
       speechAudioRef.current = audio;
       audio.onplay = () => setAvatarState("speaking");
-      audio.onended = resumeBluyeListening;
-      audio.onerror = resumeBluyeListening;
+      audio.onended = resumeVoiceListening;
+      audio.onerror = resumeVoiceListening;
       await audio.play();
     } catch (exc) {
-      console.error("[TTS] Bluye Edge TTS failed", exc);
-      resumeBluyeListening();
+      console.error("[TTS] Voice playback failed", exc);
+      resumeVoiceListening();
     }
   }
 
@@ -173,7 +173,7 @@ export default function Page() {
 
   return (
     <main className="min-h-screen bg-[#05080f] px-4 py-8 text-[#eaf4ff]">
-      <BluyeInterviewVoiceController
+      <InterviewVoiceController
         enabled={status === "active" && avatarState === "listening" && !loading}
         acceptingAnswer={status === "active" && avatarState === "listening" && !isSubmittingAnswerRef.current}
         onListeningChange={(listening) => {
@@ -225,9 +225,9 @@ export default function Page() {
                   {avatarState === "speaking" && <button type="button" onClick={stopSpeaking} className="text-xs font-bold uppercase text-yellow-300">Skip Speech</button>}
                 </div>
                 <div className="min-h-36 overflow-y-auto rounded-md border border-cyan/20 bg-[#08101e] p-4 text-sm leading-relaxed text-white">
-                  {candidateAnswer || <span className="text-white/35">{avatarState === "listening" ? "Listening with Bluye voice system..." : avatarState === "speaking" ? "Interviewer speaking..." : "Processing..."}</span>}
+                  {candidateAnswer || <span className="text-white/35">{avatarState === "listening" ? "Listening with voice system..." : avatarState === "speaking" ? "Interviewer speaking..." : "Processing..."}</span>}
                 </div>
-                <div className="flex items-center justify-between rounded-md border border-cyan/15 bg-cyan/5 px-4 py-3 text-xs text-[#8fb2d8]"><span className="font-bold uppercase text-white">{avatarState === "listening" ? "Bluye microphone active" : avatarState === "speaking" ? "Interviewer speaking" : "Thinking"}</span><span>Bluye VAD endpointing</span></div>
+                <div className="flex items-center justify-between rounded-md border border-cyan/15 bg-cyan/5 px-4 py-3 text-xs text-[#8fb2d8]"><span className="font-bold uppercase text-white">{avatarState === "listening" ? "Microphone active" : avatarState === "speaking" ? "Interviewer speaking" : "Thinking"}</span><span>VAD endpointing</span></div>
               </div>
             </div>
           </section>

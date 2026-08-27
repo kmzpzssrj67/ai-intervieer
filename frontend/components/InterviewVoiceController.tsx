@@ -1,8 +1,8 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_BLUYE_API ?? "http://localhost:8080";
+const API = process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8080";
 const WS_URL = API.replace(/^http/i, "ws") + "/ws/chat";
 
 const VAD_START = 0.035;
@@ -22,7 +22,7 @@ type Props = {
   onListeningChange?: (listening: boolean) => void;
 };
 
-export default function BluyeInterviewVoiceController({ enabled, acceptingAnswer, onFinalTranscript, onListeningChange }: Props) {
+export default function InterviewVoiceController({ enabled, acceptingAnswer, onFinalTranscript, onListeningChange }: Props) {
   const [needTap, setNeedTap] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const currentTurnRef = useRef<string | null>(null);
@@ -71,7 +71,7 @@ export default function BluyeInterviewVoiceController({ enabled, acceptingAnswer
           const msg = JSON.parse(event.data);
           if (msg.type === "transcript" && typeof msg.text === "string") {
             releaseTurn(msg.turn_id || currentTurnRef.current || "");
-            console.log("[BluyeVoice] transcript", { text: msg.text, accepting: acceptingRef.current, sent: finalTranscriptSentRef.current });
+            console.log("[Voice] transcript", { text: msg.text, accepting: acceptingRef.current, sent: finalTranscriptSentRef.current });
             if (acceptingRef.current && !finalTranscriptSentRef.current) {
               finalTranscriptSentRef.current = true;
               acceptingRef.current = false;

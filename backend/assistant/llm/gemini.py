@@ -50,7 +50,7 @@ class GeminiServiceError(Exception):
 
 
 class GeminiClient:
-    """Gemini wrapper adapted from Bluye's SDK/client separation pattern."""
+    """Gemini wrapper for model calls."""
 
     def __init__(self) -> None:
         self.model = config.GEMINI_MODEL
