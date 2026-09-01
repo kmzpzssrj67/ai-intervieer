@@ -1,134 +1,88 @@
 ﻿"use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import "./Avatar.css";
+import type { AvatarState } from "./types";
 
-export type AvatarState = "idle" | "speaking" | "listening" | "thinking";
+export type { AvatarState } from "./types";
 
-interface AvatarProps {
+export type AvatarProps = {
   state: AvatarState;
-}
-
-const CLIP_FILE: Record<AvatarState, string> = {
-  idle: "idle.mp4",
-  speaking: "speaking.mp4",
-  listening: "listening.mp4",
-  thinking: "thinking.mp4",
+  visemeState?: AvatarState;
+  audioElement?: HTMLAudioElement | null;
+  isSpeaking?: boolean;
 };
 
-const clipSrc = (state: AvatarState) => "/" + encodeURIComponent(CLIP_FILE[state]);
-const STATES: AvatarState[] = ["idle", "speaking", "listening", "thinking"];
-const SPEAKING_START_SECONDS = 1;
-const SPEAKING_END_SECONDS = 3;
-const SPEAKING_PLAYBACK_RATE = 0.85;
+const ASSET_BY_STATE: Record<AvatarState, string> = {
+  idle: "/avatar/idle.png",
+  listening: "/avatar/idle.png",
+  thinking: "/avatar/thinking.png",
+  speaking: "/avatar/mouth/aa.png",
+  mbp: "/avatar/mouth/mbp.png",
+  aa: "/avatar/mouth/aa.png",
+  ee: "/avatar/mouth/ee.png",
+  oh: "/avatar/mouth/oh.png",
+  oo: "/avatar/mouth/oo.png",
+  fv: "/avatar/mouth/fv.png",
+  sh: "/avatar/mouth/sh.png",
+  ldt: "/avatar/mouth/ldt.png",
+};
 
-export default function Avatar({ state }: AvatarProps) {
-  const refs = useRef<Record<AvatarState, HTMLVideoElement | null>>({
-    idle: null,
-    speaking: null,
-    listening: null,
-    thinking: null,
-  });
-  const [active, setActive] = useState<AvatarState>(state);
-  const [composited, setComposited] = useState<Set<AvatarState>>(() => new Set(["idle", state]));
-  const activeRef = useRef<AvatarState>(state);
+const PRELOAD_ASSETS = [
+  ASSET_BY_STATE.idle,
+  ASSET_BY_STATE.mbp,
+  ASSET_BY_STATE.aa,
+  ASSET_BY_STATE.ee,
+  ASSET_BY_STATE.oh,
+  ASSET_BY_STATE.oo,
+  ASSET_BY_STATE.fv,
+  ASSET_BY_STATE.sh,
+  ASSET_BY_STATE.ldt,
+] as const;
 
-  function playClip(clip: AvatarState) {
-    setComposited((current) => {
-      if (current.has(clip)) return current;
-      const next = new Set(current);
-      next.add(clip);
-      return next;
-    });
+export default function Avatar({ state, visemeState }: AvatarProps) {
+  const [baseSrc, setBaseSrc] = useState<string>(ASSET_BY_STATE.idle);
+  const [mouthSrc, setMouthSrc] = useState<string | null>(null);
 
-    const video = refs.current[clip];
-    try {
-      if (clip === "speaking" && video) video.playbackRate = SPEAKING_PLAYBACK_RATE;
-      video?.play()?.catch?.(() => {});
-    } catch {
-      /* autoplay can be blocked during hydration */
+  useEffect(() => {
+    if (state === "speaking") {
+      const nextBase = ASSET_BY_STATE.idle;
+      const nextMouth = ASSET_BY_STATE[visemeState ?? "mbp"] ?? ASSET_BY_STATE.mbp;
+      setBaseSrc((current) => (current === nextBase ? current : nextBase));
+      setMouthSrc((current) => (current === nextMouth ? current : nextMouth));
+      return;
     }
 
-    const previous = activeRef.current;
-    activeRef.current = clip;
-    setActive(clip);
+    const nextBase = ASSET_BY_STATE[state] ?? ASSET_BY_STATE.idle;
+    setBaseSrc((current) => (current === nextBase ? current : nextBase));
+    setMouthSrc(null);
+  }, [state, visemeState]);
 
-    if (previous && previous !== clip && previous !== "idle") {
-      window.setTimeout(() => {
-        if (activeRef.current !== previous) {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    void Promise.all(
+      PRELOAD_ASSETS.map(async (source) => {
+        const img = new window.Image();
+        img.decoding = "sync";
+        img.src = source;
+
+        if (typeof img.decode === "function") {
           try {
-            const outgoing = refs.current[previous];
-            outgoing?.pause();
-            if (outgoing) outgoing.currentTime = 0;
+            await img.decode();
           } catch {
-            /* noop */
+            // Ignore individual decode failures; the browser will still keep the image available.
           }
-          setComposited((current) => {
-            if (!current.has(previous)) return current;
-            const next = new Set(current);
-            next.delete(previous);
-            return next;
-          });
         }
-      }, 420);
-    }
-  }
-
-  useEffect(() => {
-    playClip(state);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
-
-  useEffect(() => {
-    try {
-      refs.current.idle?.play?.()?.catch?.(() => {});
-    } catch {
-      /* noop */
-    }
+      }),
+    );
   }, []);
 
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-md border border-cyan/20 bg-[#08101e] p-6 shadow-2xl">
-      <div className="absolute inset-0 bg-black" />
-      {STATES.map((clip) => {
-        const isIdle = clip === "idle";
-        const visible = active === clip || (isIdle && active === "idle");
-        const isComposited = isIdle || composited.has(clip);
-        const isSpeaking = clip === "speaking";
-        return (
-          <video
-            key={clip}
-            ref={(el) => {
-              refs.current[clip] = el;
-            }}
-            src={clipSrc(clip)}
-            muted
-            playsInline
-            preload="auto"
-            loop={!isSpeaking}
-            onLoadedMetadata={(event) => {
-              if (isSpeaking) {
-                event.currentTarget.playbackRate = SPEAKING_PLAYBACK_RATE;
-                event.currentTarget.currentTime = SPEAKING_START_SECONDS;
-              }
-            }}
-            onTimeUpdate={(event) => {
-              if (isSpeaking && event.currentTarget.currentTime >= SPEAKING_END_SECONDS) {
-                event.currentTarget.currentTime = SPEAKING_START_SECONDS;
-                event.currentTarget.play().catch(() => {});
-              }
-            }}
-            className="absolute inset-0 h-full w-full object-cover"
-            style={{
-              opacity: visible ? 1 : 0,
-              visibility: isComposited ? "visible" : "hidden",
-              transition: "opacity 320ms ease",
-              zIndex: active === clip ? 20 : isIdle ? 0 : 10,
-            }}
-          />
-        );
-      })}
+    <div className={`avatar-shell avatar-state-${state}`}>
+      <img className="avatar-base" src={baseSrc} alt={`Avatar ${state}`} />
+      {mouthSrc && <img className="avatar-mouth" src={mouthSrc} alt="" aria-hidden="true" />}
     </div>
   );
 }
-
 

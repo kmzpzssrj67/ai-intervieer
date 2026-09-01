@@ -6,6 +6,133 @@ import InterviewVoiceController from "@/components/InterviewVoiceController";
 import * as api from "@/services/interviewApi";
 
 type Status = "setup" | "active" | "completed";
+type LipSyncWordTiming = { word: string; start: number; duration: number };
+type LipSyncEvent = { start: number; end: number; viseme: AvatarState };
+
+const DEBUG_LIP_SYNC = false;
+const MIN_VISEME_HOLD_MS = 100;
+const RAPID_SWITCH_SUPPRESSION_MS = 160;
+
+const PHONEME_TO_VISEME: Record<string, AvatarState> = {
+  m: "mbp",
+  b: "mbp",
+  p: "mbp",
+  f: "fv",
+  v: "fv",
+  th: "fv",
+  s: "ldt",
+  z: "ldt",
+  l: "ldt",
+  d: "ldt",
+  t: "ldt",
+  n: "ldt",
+  sh: "sh",
+  ch: "sh",
+  zh: "sh",
+  j: "sh",
+  a: "aa",
+  ah: "aa",
+  ae: "aa",
+  e: "ee",
+  eh: "ee",
+  i: "ee",
+  y: "ee",
+  o: "oh",
+  oh: "oh",
+  u: "oo",
+  oo: "oo",
+  ow: "oo",
+  w: "oo",
+  h: "mbp",
+  r: "aa",
+  g: "mbp",
+  k: "mbp",
+  q: "mbp",
+  x: "mbp",
+};
+
+function normalizeWord(word: string): string {
+  return word.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+function approximateWordPhonemes(word: string): string[] {
+  const clean = normalizeWord(word);
+  if (!clean) return ["mbp"];
+
+  const phonemes: string[] = [];
+  for (let index = 0; index < clean.length; index += 1) {
+    const letter = clean[index];
+    const next = clean[index + 1] ?? "";
+    const pair = `${letter}${next}`;
+
+    if (pair === "th") {
+      phonemes.push("th");
+      index += 1;
+      continue;
+    }
+    if (pair === "sh" || pair === "ch" || pair === "zh" || pair === "gh") {
+      phonemes.push(pair === "gh" ? "sh" : pair);
+      index += 1;
+      continue;
+    }
+
+    if (["a", "e", "i", "o", "u"].includes(letter)) {
+      if (letter === "a") phonemes.push("a");
+      else if (["e", "i", "y"].includes(letter)) phonemes.push("e");
+      else if (letter === "o") phonemes.push("o");
+      else phonemes.push("u");
+      continue;
+    }
+
+    if (["m", "b", "p", "g", "k", "q", "x", "h"].includes(letter)) phonemes.push(letter);
+    else if (["f", "v"].includes(letter)) phonemes.push(letter);
+    else if (["s", "z", "l", "d", "t", "n"].includes(letter)) phonemes.push(letter);
+    else if (["w", "r"].includes(letter)) phonemes.push(letter === "w" ? "w" : "r");
+    else phonemes.push("mbp");
+  }
+
+  return phonemes.length ? phonemes : ["mbp"];
+}
+
+function buildVisemeTimeline(words: LipSyncWordTiming[]): LipSyncEvent[] {
+  const timeline: LipSyncEvent[] = [];
+  for (const word of words) {
+    const clean = normalizeWord(word.word);
+    if (!clean || !Number.isFinite(word.start) || !Number.isFinite(word.duration) || word.duration <= 0) continue;
+
+    const phonemes = approximateWordPhonemes(clean);
+    const segmentDuration = word.duration / Math.max(phonemes.length, 1);
+
+    for (let index = 0; index < phonemes.length; index += 1) {
+      const phoneme = phonemes[index];
+      const viseme = PHONEME_TO_VISEME[phoneme] ?? PHONEME_TO_VISEME.m;
+      const start = word.start + index * segmentDuration;
+      const end = index === phonemes.length - 1 ? word.start + word.duration : start + segmentDuration;
+
+      if (timeline.length > 0) {
+        const previous = timeline[timeline.length - 1];
+        if (previous.viseme === viseme && Math.abs(previous.end - start) < 0.02) {
+          previous.end = end;
+          continue;
+        }
+      }
+
+      timeline.push({ start, end, viseme });
+    }
+  }
+
+  return timeline;
+}
+
+function findVisemeAtTime(timeline: LipSyncEvent[], currentTime: number): AvatarState {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const event = timeline[index];
+    if (currentTime >= event.start && currentTime < event.end) {
+      return event.viseme;
+    }
+  }
+  return "mbp";
+}
 
 export default function Page() {
   const [candidateName, setCandidateName] = useState("");
@@ -30,6 +157,78 @@ export default function Page() {
   const isSubmittingAnswerRef = useRef(false);
   const statusRef = useRef<Status>("setup");
   const speechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const visemeFrameRef = useRef<number | null>(null);
+  const visemeStateRef = useRef<AvatarState>("idle");
+  const visemeTimelineRef = useRef<LipSyncEvent[]>([]);
+  const lastVisemeChangeAtRef = useRef(0);
+  const recentVisemeHistoryRef = useRef<AvatarState[]>([]);
+  const [speechAudio, setSpeechAudio] = useState<HTMLAudioElement | null>(null);
+  const [visemeState, setVisemeState] = useState<AvatarState>("idle");
+
+  function stopVisemeAnimation() {
+    if (visemeFrameRef.current !== null) {
+      window.cancelAnimationFrame(visemeFrameRef.current);
+      visemeFrameRef.current = null;
+    }
+    visemeTimelineRef.current = [];
+    lastVisemeChangeAtRef.current = 0;
+    recentVisemeHistoryRef.current = [];
+    visemeStateRef.current = "idle";
+    setVisemeState("idle");
+  }
+
+  function startVisemeSync(audio: HTMLAudioElement, timeline: LipSyncEvent[]) {
+    stopVisemeAnimation();
+    visemeTimelineRef.current = timeline;
+
+    const update = () => {
+      const activeAudio = speechAudioRef.current;
+      if (!activeAudio || activeAudio.ended || activeAudio.paused) {
+        stopVisemeAnimation();
+        return;
+      }
+
+      const currentTime = activeAudio.currentTime;
+      const nextViseme = timeline.length > 0 ? findVisemeAtTime(timeline, currentTime) : "mbp";
+
+      if (DEBUG_LIP_SYNC) {
+        const activeWord = timeline.find((event) => currentTime >= event.start && currentTime < event.end);
+        console.log("[lip-sync]", { currentTime, nextViseme, activeWord });
+      }
+
+      const currentViseme = visemeStateRef.current;
+      const now = performance.now();
+
+      if (nextViseme === currentViseme) {
+        visemeFrameRef.current = window.requestAnimationFrame(update);
+        return;
+      }
+
+      if (now - lastVisemeChangeAtRef.current < MIN_VISEME_HOLD_MS) {
+        visemeFrameRef.current = window.requestAnimationFrame(update);
+        return;
+      }
+
+      const recentVisemes = recentVisemeHistoryRef.current.slice(-2);
+      if (recentVisemes.length === 2 && recentVisemes[0] === nextViseme && recentVisemes[1] !== nextViseme && now - lastVisemeChangeAtRef.current < RAPID_SWITCH_SUPPRESSION_MS) {
+        visemeFrameRef.current = window.requestAnimationFrame(update);
+        return;
+      }
+
+      visemeStateRef.current = nextViseme;
+      lastVisemeChangeAtRef.current = now;
+      recentVisemeHistoryRef.current = [...recentVisemeHistoryRef.current.slice(-2), nextViseme];
+      setVisemeState(nextViseme);
+
+      visemeFrameRef.current = window.requestAnimationFrame(update);
+    };
+
+    visemeStateRef.current = "mbp";
+    lastVisemeChangeAtRef.current = performance.now();
+    recentVisemeHistoryRef.current = ["mbp"];
+    setVisemeState("mbp");
+    visemeFrameRef.current = window.requestAnimationFrame(update);
+  }
 
   useEffect(() => {
     statusRef.current = status;
@@ -53,19 +252,49 @@ export default function Page() {
       setAvatarState("listening");
     };
 
+    const turnId = `INTERVIEW-TTS-${Date.now()}`;
+
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8080"}/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, turn_id: `INTERVIEW-TTS-${Date.now()}` }),
-      });
-      if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
-      const blob = await res.blob();
-      const audio = new Audio(URL.createObjectURL(blob));
+      const [audioRes, metadataRes] = await Promise.all([
+        fetch(`${process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8000"}/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, turn_id: turnId }),
+        }),
+        fetch(`${process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8000"}/tts/metadata`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, turn_id: turnId }),
+        }),
+      ]);
+
+      if (!audioRes.ok) throw new Error(`TTS failed: ${audioRes.status}`);
+      const audioBlob = await audioRes.blob();
+      const metadata = (await metadataRes.json()) as { words?: LipSyncWordTiming[]; error?: string };
+      if (!metadataRes.ok || metadata.error) {
+        throw new Error(metadata.error ?? `TTS metadata failed: ${metadataRes.status}`);
+      }
+
+      const timeline = buildVisemeTimeline(metadata.words ?? []);
+      const audio = new Audio(URL.createObjectURL(audioBlob));
       speechAudioRef.current = audio;
-      audio.onplay = () => setAvatarState("speaking");
-      audio.onended = resumeVoiceListening;
-      audio.onerror = resumeVoiceListening;
+      setSpeechAudio(audio);
+      audio.onplay = () => {
+        setAvatarState("speaking");
+        startVisemeSync(audio, timeline);
+      };
+      audio.onended = () => {
+        stopVisemeAnimation();
+        setSpeechAudio(null);
+        setAvatarState("idle");
+        resumeVoiceListening();
+      };
+      audio.onerror = () => {
+        stopVisemeAnimation();
+        setSpeechAudio(null);
+        setAvatarState("idle");
+        resumeVoiceListening();
+      };
       await audio.play();
     } catch (exc) {
       console.error("[TTS] Voice playback failed", exc);
@@ -74,6 +303,7 @@ export default function Page() {
   }
 
   function stopSpeaking() {
+    stopVisemeAnimation();
     speechAudioRef.current?.pause();
     if (statusRef.current === "active" && !isSubmittingAnswerRef.current) setAvatarState("listening");
   }
@@ -167,6 +397,7 @@ export default function Page() {
 
   useEffect(() => {
     return () => {
+      stopVisemeAnimation();
       speechAudioRef.current?.pause();
     };
   }, []);
@@ -212,7 +443,7 @@ export default function Page() {
 
         {status === "active" && (
           <section className="grid grid-cols-1 gap-6 md:grid-cols-5">
-            <div className="md:col-span-2"><div className="aspect-square md:h-72"><Avatar state={avatarState} /></div></div>
+            <div className="md:col-span-2"><div className="aspect-square md:h-72"><Avatar state={avatarState} visemeState={visemeState} audioElement={speechAudio} isSpeaking={avatarState === "speaking"} /></div></div>
             <div className="flex flex-col gap-6 md:col-span-3">
               <div className="panel flex flex-col gap-4 p-6">
                 <div className="flex items-center justify-between"><span className="text-xs font-extrabold uppercase tracking-normal text-[#1fd3ff]">Active Question</span><span className="text-sm font-bold text-[#8fb2d8]">{questionNumber} / {maxQuestions}</span></div>

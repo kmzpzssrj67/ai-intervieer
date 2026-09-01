@@ -58,6 +58,18 @@ export interface InterviewAssessmentResponse {
   created_at: string;
 }
 
+export interface TtsWordTiming {
+  word: string;
+  start: number;
+  duration: number;
+}
+
+export interface TtsMetadataResponse {
+  turn_id?: string | null;
+  words: TtsWordTiming[];
+  error?: string;
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/health`, { method: "GET", cache: "no-store" });
@@ -96,4 +108,15 @@ export async function getAssessment(interviewId: number): Promise<InterviewAsses
   });
   if (!res.ok) throw new Error((await res.text()) || `Failed to fetch assessment: ${res.status}`);
   return (await res.json()) as InterviewAssessmentResponse;
+}
+
+export async function fetchTtsMetadata(text: string, turnId?: string): Promise<TtsWordTiming[]> {
+  const res = await fetch(`${API_BASE}/tts/metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, turn_id: turnId ?? `frontend-${Date.now()}` }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || `Failed to fetch TTS metadata: ${res.status}`);
+  const data = (await res.json()) as TtsMetadataResponse;
+  return data.words ?? [];
 }

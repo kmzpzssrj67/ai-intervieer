@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router
 from database import create_tables
+from voice_service import get_whisper_manager
 
 
 def create_app() -> FastAPI:
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def on_startup() -> None:
         create_tables()
+        get_whisper_manager()
 
     app.include_router(router)
     return app

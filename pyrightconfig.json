@@ -1,0 +1,7 @@
+{
+  "venvPath": "d:\\ai_intervewer\\ai-technical-interviewer\\backend",
+  "venv": ".venv",
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning"
+}

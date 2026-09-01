@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8080";
+const API = process.env.NEXT_PUBLIC_VOICE_API ?? "http://localhost:8000";
 const WS_URL = API.replace(/^http/i, "ws") + "/ws/chat";
 
 const VAD_START = 0.035;

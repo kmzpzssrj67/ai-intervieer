@@ -18,12 +18,12 @@ Local runtime files are intentionally ignored: `.env`, virtualenvs, logs, SQLite
 2. User enters a candidate name and launches the interview.
 3. Frontend calls `POST /api/interview/start` on the interviewer backend.
 4. Backend creates an interview record and returns question 1.
-5. Frontend requests TTS from `POST http://localhost:8080/tts` and plays the question audio.
+5. Frontend requests TTS from the same FastAPI backend at `POST http://127.0.0.1:8000/tts` and plays the question audio.
 6. Avatar switches to `speaking` when audio playback actually starts.
 7. When audio ends, avatar switches to `listening`.
 8. `InterviewVoiceController` captures mic audio using the VAD lifecycle.
 9. VAD detects speech start, tracks audio frames, freezes the silence window when speech stops, and sends final PCM audio to `/ws/chat`.
-10. Voice backend transcribes the audio and returns a final `transcript` websocket message.
+10. The same backend transcribes the audio and returns a final `transcript` websocket message.
 11. Frontend locks the transcript so the answer can only submit once.
 12. Frontend calls `POST /api/interview/{interview_id}/answer`.
 13. Backend evaluates the answer, records the turn, and either returns `next_question` or marks the assessment available.
@@ -34,9 +34,8 @@ Local runtime files are intentionally ignored: `.env`, virtualenvs, logs, SQLite
 
 | Service | Default URL | Purpose |
 | --- | --- | --- |
-| Interviewer backend | `http://127.0.0.1:8000` | Interview state, question generation, answer evaluation, assessment |
+| Interviewer backend | `http://127.0.0.1:8000` | Interview state, question generation, answer evaluation, assessment, TTS, and STT websocket flow |
 | Interviewer frontend | `http://localhost:3000` | Candidate UI, avatar, TTS playback, interview orchestration |
-| Voice backend | `http://localhost:8080` | Voice services: `/tts` and `/ws/chat` STT transcript flow |
 
 ## Backend Architecture
 
@@ -117,29 +116,14 @@ Frontend variables:
 
 ```env
 NEXT_PUBLIC_INTERVIEW_API_BASE=http://127.0.0.1:8000
-NEXT_PUBLIC_VOICE_API=http://localhost:8080
+NEXT_PUBLIC_VOICE_API=http://127.0.0.1:8000
 ```
 
 Security note: real Gemini/GCP keys must stay only in local `.env` files or deployment secret stores. This public repo should contain no secrets.
 
 ## Running Locally
 
-### 1. Start Voice Backend
-
-The voice adapter expects the voice API server on port `8080`:
-
-```powershell
-cd D:\voice-backend
-python api_server.py
-```
-
-Verify:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/health
-```
-
-### 2. Start Interviewer Backend
+### 1. Start Interviewer Backend
 
 ```powershell
 cd D:\ai_intervewer\ai-technical-interviewer\backend
@@ -161,7 +145,7 @@ Swagger docs:
 http://127.0.0.1:8000/docs
 ```
 
-### 3. Start Frontend
+### 2. Start Frontend
 
 ```powershell
 cd D:\ai_intervewer\ai-technical-interviewer\frontend
@@ -184,11 +168,10 @@ cd frontend
 npm run build
 ```
 
-Backend smoke checks:
+Backend smoke check:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod http://localhost:8080/health
 ```
 
 ## Public Repo Safety Checklist

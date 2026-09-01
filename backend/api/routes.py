@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -16,6 +17,7 @@ from schemas import (
 )
 from services.chat_service import ChatService
 from services.interview_service import InterviewService
+from voice_service import TTSRequest, tts_metadata_response, tts_response, ws_chat as voice_ws_chat
 
 
 router = APIRouter()
@@ -66,34 +68,24 @@ def get_interview_assessment(
     return interview_service.get_assessment(db, interview_id)
 
 
+@router.get("/tts")
+async def tts_get(text: str = "") -> Response:
+    if not text.strip():
+        return Response(content=b"", media_type="audio/mpeg")
+    return await tts_response(text)
+
+
+@router.post("/tts")
+async def tts(req: TTSRequest) -> Response:
+    return await tts_response(req.text, req.turn_id)
+
+
+@router.post("/tts/metadata")
+async def tts_metadata(req: TTSRequest) -> JSONResponse:
+    return await tts_metadata_response(req.text, req.turn_id)
+
+
 @router.websocket("/ws/chat")
 async def ws_chat(websocket: WebSocket) -> None:
-    await websocket.accept()
-    try:
-        while True:
-            payload = await websocket.receive_json()
-            message = str(payload.get("message", "")).strip()
-            if not message:
-                await websocket.send_json({"type": "error", "message": "empty message"})
-                continue
-            try:
-                response = await chat_service.reply(ChatRequest(message=message))
-            except HTTPException as exc:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "status_code": exc.status_code,
-                        "message": exc.detail,
-                    }
-                )
-                continue
-            await websocket.send_json(
-                {
-                    "type": "done",
-                    "reply": response.reply,
-                    "provider": response.provider,
-                }
-            )
-    except WebSocketDisconnect:
-        return
+    await voice_ws_chat(websocket)
 
