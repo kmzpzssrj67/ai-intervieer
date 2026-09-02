@@ -1,4 +1,6 @@
-﻿"use client";
+"use client";
+
+declare module "*.css";
 
 import { useEffect, useState } from "react";
 import "./Avatar.css";
@@ -81,7 +83,12 @@ export default function Avatar({ state, visemeState }: AvatarProps) {
   return (
     <div className={`avatar-shell avatar-state-${state}`}>
       <img className="avatar-base" src={baseSrc} alt={`Avatar ${state}`} />
-      {mouthSrc && <img className="avatar-mouth" src={mouthSrc} alt="" aria-hidden="true" />}
+      {mouthSrc && (
+        <>
+          <img className="avatar-mouth" src={mouthSrc} alt="" aria-hidden="true" />
+          <img className="avatar-face-restore" src={ASSET_BY_STATE.idle} alt="" aria-hidden="true" />
+        </>
+      )}
     </div>
   );
 }

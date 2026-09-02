@@ -1,13 +1,22 @@
 ﻿.vscode/
 .DS_Store
 .env
+.env.*
+!.env.example
+!.env.*
 .venv/
+venv/
 **/.venv/
+**/venv/
+__pycache__/
 **/__pycache__/
+.pytest_cache/
 **/.pytest_cache/
+*.pyc
 **/*.pyc
 **/*.pyo
 **/*.pyd
+*.log
 **/*.log
 **/*.err.log
 **/*.out.log
@@ -18,8 +27,9 @@
 **/*.sqlite-journal
 **/*.mp3
 **/*.wav
+.next/
 **/.next/
+node_modules/
 **/node_modules/
-frontend/public/avatar/
-frontend/public/live2d/
+!backend/.env.example
 

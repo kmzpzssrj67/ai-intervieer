@@ -13,7 +13,8 @@
 }
 
 .avatar-base,
-.avatar-mouth {
+.avatar-mouth,
+.avatar-face-restore {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -26,13 +27,35 @@
   transform: none !important;
 }
 
+/* Layer 1: stable idle base */
 .avatar-base {
   z-index: 1;
 }
 
+/* Layer 2: full-frame viseme, NO mask — ghost-mouth impossible */
 .avatar-mouth {
   z-index: 2;
   transition: opacity 0.03s linear;
+}
+
+/* Layer 3: idle.png on top with full-head hole — body+background stay fixed */
+.avatar-face-restore {
+  z-index: 3;
+
+  -webkit-mask-image: radial-gradient(
+    ellipse 22% 28% at 50% 33%,
+    rgba(0, 0, 0, 0.0) 80%,
+    rgba(0, 0, 0, 1.0) 95%
+  );
+  mask-image: radial-gradient(
+    ellipse 22% 28% at 50% 33%,
+    rgba(0, 0, 0, 0.0) 80%,
+    rgba(0, 0, 0, 1.0) 95%
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
 }
 
 .avatar-state-thinking,
