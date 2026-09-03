@@ -1078,6 +1078,106 @@ test("Priority C: VisualPoseScheduler accelerates ending closure hold when isSil
   assert.equal(sched.renderedViseme, "mbp");
 });
 
+test("Fix #1: Extreme contrast transitions use softened 48ms duration in both directions", () => {
+  // Normal transitions keep their existing durations
+  assert.equal(commitTransitionMs("aa", false, "ee"), POSE_CONFIG.TRANSITION_MS); // 38ms
+  assert.equal(commitTransitionMs("mbp", false, "aa"), POSE_CONFIG.MBP_TRANSITION_MS); // 32ms
+  assert.equal(commitTransitionMs("oo", false, "kg"), 42); // coarticulation
+
+  // ldt ↔ th uses softened duration (48ms)
+  assert.equal(commitTransitionMs("th", false, "ldt"), 48);
+  assert.equal(commitTransitionMs("ldt", false, "th"), 48);
+
+  // mbp ↔ ldt uses softened duration (48ms)
+  assert.equal(commitTransitionMs("ldt", false, "mbp"), 48);
+  assert.equal(commitTransitionMs("mbp", false, "ldt"), 48);
+
+  // oh ↔ th uses softened duration (48ms)
+  assert.equal(commitTransitionMs("th", false, "oh"), 48);
+  assert.equal(commitTransitionMs("oh", false, "th"), 48);
+
+  // No collision: 48ms is strictly less than minHoldMs for all involved visemes
+  assert.ok(48 < minHoldMs("ldt")); // 48 < 130
+  assert.ok(48 < minHoldMs("th"));  // 48 < 130
+  assert.ok(48 < minHoldMs("mbp")); // 48 < 70
+  assert.ok(48 < minHoldMs("oh"));  // 48 < 140
+});
+
+test("Fix #2: Vowel bounce suppression merges ee -> short stop -> ee into continuous vowel", () => {
+  const audioDuration = 1.0;
+
+  // ee -> ldt(short <= 65ms) -> ee merges into continuous ee
+  const rawLdt = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.250, viseme: "ldt" as const }, // 50ms <= 65ms
+    { start: 0.250, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabLdt = stabilizeVisemeTimeline(rawLdt, audioDuration);
+  assert.equal(stabLdt.length, 1);
+  assert.equal(stabLdt[0].viseme, "ee");
+  assert.equal(stabLdt[0].start, 0.100);
+  assert.equal(stabLdt[0].end, 0.400);
+
+  // ee -> kg(short <= 65ms) -> ee merges into continuous ee
+  const rawKg = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.250, viseme: "kg" as const }, // 50ms <= 65ms
+    { start: 0.250, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabKg = stabilizeVisemeTimeline(rawKg, audioDuration);
+  assert.equal(stabKg.length, 1);
+  assert.equal(stabKg[0].viseme, "ee");
+  assert.equal(stabKg[0].start, 0.100);
+  assert.equal(stabKg[0].end, 0.400);
+
+  // Negative tests: DO NOT merge
+  // 1. ee -> mbp(58ms) -> ee (bilabial closure visually mandatory)
+  const rawMbp = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.258, viseme: "mbp" as const }, // 58ms >= 55ms min dwell and <= 65ms
+    { start: 0.258, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabMbp = stabilizeVisemeTimeline(rawMbp, audioDuration);
+  assert.ok(stabMbp.some((e) => e.viseme === "mbp"), "mbp closure must NOT be suppressed");
+
+  // 2. ee -> fv(62ms) -> ee (labiodental visually mandatory)
+  const rawFv = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.262, viseme: "fv" as const }, // 62ms >= 60ms min dwell and <= 65ms
+    { start: 0.262, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabFv = stabilizeVisemeTimeline(rawFv, audioDuration);
+  assert.ok(stabFv.some((e) => e.viseme === "fv"), "fv must NOT be suppressed");
+
+  // 3. ee -> th(62ms) -> ee (linguadental visually mandatory)
+  const rawTh = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.262, viseme: "th" as const }, // 62ms >= 60ms min dwell and <= 65ms
+    { start: 0.262, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabTh = stabilizeVisemeTimeline(rawTh, audioDuration);
+  assert.ok(stabTh.some((e) => e.viseme === "th"), "th must NOT be suppressed");
+
+  // 4. ee -> ldt(long > 65ms) -> ee (longer stops must be articulated)
+  const rawLongLdt = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.280, viseme: "ldt" as const }, // 80ms > 65ms
+    { start: 0.280, end: 0.400, viseme: "ee" as const },
+  ];
+  const stabLongLdt = stabilizeVisemeTimeline(rawLongLdt, audioDuration);
+  assert.ok(stabLongLdt.some((e) => e.viseme === "ldt"), "ldt > 65ms must NOT be suppressed");
+
+  // 5. ee -> ldt -> aa (different vowels: aperture changes, must not merge)
+  const rawDiffVowels = [
+    { start: 0.100, end: 0.200, viseme: "ee" as const },
+    { start: 0.200, end: 0.250, viseme: "ldt" as const },
+    { start: 0.250, end: 0.400, viseme: "aa" as const },
+  ];
+  const stabDiff = stabilizeVisemeTimeline(rawDiffVowels, audioDuration);
+  assert.equal(stabDiff[0].viseme, "ee");
+  assert.equal(stabDiff[stabDiff.length - 1].viseme, "aa");
+});
+
 
 
 

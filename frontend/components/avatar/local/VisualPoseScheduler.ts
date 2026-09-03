@@ -69,9 +69,26 @@ export function commitTransitionMs(
   targetPaceMs?: number,
 ): number {
   if (isFinalClose) return POSE_CONFIG.FINAL_CLOSE_MS;
-  if (viseme === "mbp") return POSE_CONFIG.MBP_TRANSITION_MS;
 
   const isFast = Boolean(targetPaceMs && targetPaceMs < 110);
+
+  // Fix #1: High-contrast transition softening for extreme photometric pairs:
+  // ldt ↔ th, mbp ↔ ldt, oh ↔ th (both directions)
+  if (fromViseme) {
+    const isExtremeContrast =
+      (fromViseme === "ldt" && viseme === "th") ||
+      (fromViseme === "th" && viseme === "ldt") ||
+      (fromViseme === "mbp" && viseme === "ldt") ||
+      (fromViseme === "ldt" && viseme === "mbp") ||
+      (fromViseme === "oh" && viseme === "th") ||
+      (fromViseme === "th" && viseme === "oh");
+    if (isExtremeContrast) {
+      return isFast ? 42 : 48;
+    }
+  }
+
+  if (viseme === "mbp") return POSE_CONFIG.MBP_TRANSITION_MS;
+
   // Conservative coarticulation: smoother anticipatory crossfade into rounded vowels or rhotic from consonants
   if ((viseme === "oo" || viseme === "oh" || viseme === "r") && fromViseme && !VOWELS.has(fromViseme)) {
     return isFast ? 34 : 42;

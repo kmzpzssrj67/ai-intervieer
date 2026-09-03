@@ -630,6 +630,9 @@ export function findVisemeAtTime(timeline: VisemeEvent[], time: number): LocalVi
   return null;
 }
 
+const VOWEL_VISEMES = new Set<LocalViseme>(["aa", "ae", "ee", "oh", "oo"]);
+const BOUNCE_TRANSIENT_STOPS = new Set<LocalViseme>(["ldt", "kg"]);
+
 /**
  * Post-process a raw viseme timeline to reduce visual pose churn.
  *
@@ -706,6 +709,32 @@ export function stabilizeVisemeTimeline(raw: VisemeEvent[], utteranceEnd: number
     }
     working = next;
   }
+
+  // ── Pass 2.5: Identical-vowel bounce suppression (V1 → transient stop → V1) ──
+  // When an identical vowel flanks a brief non-labial stop (ldt or kg <= 65ms),
+  // merge the flanking vowels into a continuous visual event to eliminate 3-frame jaw twitch.
+  const unbounced: VisemeEvent[] = [];
+  let bIdx = 0;
+  while (bIdx < working.length) {
+    if (
+      bIdx <= working.length - 3 &&
+      working[bIdx].viseme === working[bIdx + 2].viseme &&
+      VOWEL_VISEMES.has(working[bIdx].viseme) &&
+      BOUNCE_TRANSIENT_STOPS.has(working[bIdx + 1].viseme) &&
+      (working[bIdx + 1].end - working[bIdx + 1].start) <= 0.065001
+    ) {
+      unbounced.push({
+        viseme: working[bIdx].viseme,
+        start: working[bIdx].start,
+        end: working[bIdx + 2].end,
+      });
+      bIdx += 3;
+    } else {
+      unbounced.push({ ...working[bIdx] });
+      bIdx += 1;
+    }
+  }
+  working = unbounced;
 
   // ── Pass 3: re-merge any identical neighbours created by absorption ───────
   const remerged: VisemeEvent[] = [];
