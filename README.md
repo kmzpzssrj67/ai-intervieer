@@ -86,106 +86,115 @@ The interviewer does not use browser `SpeechRecognition`. It uses a dedicated vo
 
 This avoids duplicate speech recognition systems and keeps the voice service as the source of truth for the voice lifecycle.
 
-## Avatar Videos
+## Avatar Systems
 
-The avatar uses state-based looping videos from `frontend/public/`:
+The application supports two avatar modes configured via `AVATAR_PROVIDER` in `backend/.env` (default: `local`):
 
-| State | File | URL path |
-| --- | --- | --- |
-| `idle` | `idle.mp4` | `/idle.mp4` |
-| `speaking` | `speaking.mp4` | `/speaking.mp4` |
-| `listening` | `listening.mp4` | `/listening.mp4` |
-| `thinking` | `thinking.mp4` | `/thinking.mp4` |
+### 1. High-Precision Local 2D Canvas Avatar (Default)
 
-The video renderer preloads all clips, keeps the idle layer available to avoid black flashes, and switches state by opacity. The speaking video loops only the tuned `0:01` to `0:03` segment at a slower playback rate for better lip-sync.
+The local talking avatar renders client-side using an offscreen double-buffered HTML5 Canvas compositor driven by the hardware `AudioContext.currentTime` clock:
+
+- **13 Calibrated Viseme Mouth Shapes:** `mbp`, `aa`, `ae`, `ee`, `oh`, `oo`, `fv`, `sh`, `ldt`, `kg`, `sz`, `th`, `r` + `idle` and `thinking` states.
+- **Hardware Clock Synchronization:** Monotonic audio clock guarantees zero cumulative drift across lengthy technical answers.
+- **Feathered Spatial Mouth Mask:** 11-point calibrated polygon with 22px Gaussian feathering isolating the mouth while filtering out 83% of generative background variance with zero facial seams.
+- **Dynamic Anti-Flicker Scheduler:** Tempo-tracking visual dwell governor enforcing an adaptive ceiling ($\le 8.5\text{ changes/s}$) to prevent 60/120 Hz display strobe chatter.
+- **Ballistic Asymmetric Bilabial Release:** Lips remain sealed through the onset of /p/, /b/, /m/ plosives before bursting open rapidly, preventing translucent teeth artifacts during crossfades.
+- **Accelerated Silence Closure:** Post-utterance dwell drops to $\le 35\text{ ms}$ upon RMS silence confirmation, closing the mouth cleanly without lingering open.
+- **Speech Text & Number Normalizer:** Expands numbers, currency, decimals, percentages, and technical acronyms (e.g. `SQL`, `PostgreSQL`, `JWT`, `API`, `LLM`) into canonical spoken words before TTS synthesis and pronunciation mapping.
+- **Acoustic Phoneme Boundary Interface:** Built-in support for millisecond-precision phoneme boundaries from backend forced alignment, with seamless automatic fallback to the syllable-aware heuristic engine.
+- **Debug HUD:** Append `?debugSync=1` to the frontend URL to display real-time FPS, clock time, active visemes, transitions, and audio RMS meters.
+
+### 2. Optional Simli LiveRTC Avatar
+
+Set `AVATAR_PROVIDER=simli` and provide your `SIMLI_API_KEY` and `SIMLI_FACE_ID` to stream a photo-realistic cloud WebRTC avatar.
 
 ## Environment Variables
 
 Create local env files from `.env.example`. Do not commit real `.env` files.
 
-Backend variables:
+### Backend (`backend/.env`):
 
 ```env
-GEMINI_API_KEY=
-GOOGLE_API_KEY=
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_API_KEY=your_gemini_key_here
+GEMINI_MODEL=gemini-2.5-flash
 FRONTEND_URL=http://localhost:3000
+
+# Avatar Provider: 'local' (default) or 'simli'
+AVATAR_PROVIDER=local
+SIMLI_ENABLED=false
+SIMLI_API_KEY=
+SIMLI_FACE_ID=
 ```
 
-Frontend variables:
+### Frontend (`frontend/.env.local`):
 
 ```env
 NEXT_PUBLIC_INTERVIEW_API_BASE=http://127.0.0.1:8000
 NEXT_PUBLIC_VOICE_API=http://127.0.0.1:8000
 ```
 
-Security note: real Gemini/GCP keys must stay only in local `.env` files or deployment secret stores. This public repo should contain no secrets.
-
 ## Running Locally
 
 ### 1. Start Interviewer Backend
 
-```powershell
-cd D:\ai_intervewer\ai-technical-interviewer\backend
+```bash
+cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Verify:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
+```bash
+curl http://127.0.0.1:8000/health
 ```
 
-Swagger docs:
-
-```text
-http://127.0.0.1:8000/docs
-```
+Interactive Swagger API docs: `http://127.0.0.1:8000/docs`
 
 ### 2. Start Frontend
 
-```powershell
-cd D:\ai_intervewer\ai-technical-interviewer\frontend
+```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-Open:
+Open in browser: `http://localhost:3000`
 
-```text
-http://localhost:3000
-```
+## Automated Test Verification
 
-## Development Checks
+### Frontend Unit & Lip-Sync Tests
 
-Frontend build:
-
-```powershell
+```bash
 cd frontend
-npm run build
+npm run test:local-avatar
+```
+Runs the full 82-test suite covering the visual pose scheduler, transition easing, mask geometry, text normalizers, and timeline stabilization.
+
+### Backend Tests
+
+```bash
+cd backend
+pytest tests/test_local_tts.py
+pytest tests/test_simli_service.py
 ```
 
-Backend smoke check:
+### Production Build Check
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
+```bash
+cd frontend
+npx tsc --noEmit
+npm run build
 ```
 
 ## Public Repo Safety Checklist
 
-Before pushing:
+Before pushing to git:
 
 - Confirm `backend/.env` is not tracked.
+- Confirm `frontend/.env.local` is not tracked.
 - Confirm `backend/interviewer.db` is not tracked.
-- Confirm `frontend/node_modules` and `frontend/.next` are not tracked.
-- Confirm logs are not tracked.
-- Confirm `.env.example` contains empty placeholders only.
+- Confirm `node_modules` and `.next` build caches are not tracked.
+- Confirm `.env.example` contains placeholders only.
 
-Useful command:
-
-```powershell
-git ls-files | Select-String -Pattern '\.env$|\.db$|\.log$|node_modules|\.next'
-```

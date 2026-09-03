@@ -1,9 +1,11 @@
-﻿.vscode/
+.vscode/
 .DS_Store
 .env
 .env.*
+.env.local
 !.env.example
-!.env.*
+!backend/.env.example
+!frontend/.env.example
 .venv/
 venv/
 **/.venv/

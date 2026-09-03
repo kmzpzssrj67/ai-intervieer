@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 from assistant import config
 
@@ -108,7 +108,7 @@ class GeminiClient:
         return self._parse_json_object(text), "gemini"
 
     async def _request_text(self, prompt: str) -> str:
-        last_error: GeminiServiceError | None = None
+        last_error: Optional[GeminiServiceError] = None
         for attempt in range(2):
             try:
                 response = await asyncio.to_thread(

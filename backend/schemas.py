@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -164,9 +164,9 @@ class InterviewAnswerResponse(BaseModel):
     question_number: int
     score: float
     evaluation: str
-    next_question: QuestionPayload | None = None
+    next_question: Optional[QuestionPayload] = None
     assessment_available: bool = False
-    answered_question: bool | None = None
+    answered_question: Optional[bool] = None
     answer_relevance: str = ""
     topic: str = ""
     subtopic: str = ""
@@ -186,12 +186,12 @@ class InterviewTurnPayload(BaseModel):
     difficulty: str
     topic: str = ""
     subtopic: str = ""
-    answered_question: bool | None = None
+    answered_question: Optional[bool] = None
     answer_relevance: str = ""
     missing_concepts: str = "[]"
     next_focus: str = ""
     question_type: str = "conceptual"
-    score: float | None
+    score: Optional[float]
     evaluation: str
     created_at: datetime
 
@@ -216,9 +216,9 @@ class InterviewStateResponse(BaseModel):
     current_question_number: int
     max_questions: int
     current_difficulty: str
-    started_at: datetime | None
-    completed_at: datetime | None
-    current_question: QuestionPayload | None
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    current_question: Optional[QuestionPayload]
     turns: list[InterviewTurnPayload]
     topic_performance: list[TopicPerformancePayload] = Field(default_factory=list)
 
@@ -226,7 +226,7 @@ class InterviewStateResponse(BaseModel):
 class InterviewAssessmentResponse(BaseModel):
     id: int
     interview_id: int
-    overall_score: float | None
+    overall_score: Optional[float]
     technical_level: str = ""
     recommendation: str
     strongest_topics: str = "[]"
@@ -243,4 +243,11 @@ class InterviewAssessmentResponse(BaseModel):
 
 
 
+
+class SimliSessionRequest(BaseModel):
+    interview_id: int
+
+
+class SimliSessionResponse(BaseModel):
+    session_token: str
 

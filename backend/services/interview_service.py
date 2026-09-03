@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -830,7 +831,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
         question_number: int,
         current_turn: InterviewTurn,
         current_difficulty: str,
-        evaluation: EvaluationResult | None,
+        evaluation: Optional[EvaluationResult],
         topic_performance: list[InterviewTopicPerformance],
         history: list[InterviewTurn],
     ) -> TopicPlan:
@@ -909,7 +910,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
 
     def _build_next_question(
         self,
-        proposed: NextQuestionResult | None,
+        proposed: Optional[NextQuestionResult],
         plan: TopicPlan,
         question_number: int,
         previous_questions: list[str],
@@ -1010,7 +1011,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
         return score
 
     @staticmethod
-    def _next_difficulty(current: str, score_hint: float | None, answered_question: bool, answer_relevance: str) -> str:
+    def _next_difficulty(current: str, score_hint: Optional[float], answered_question: bool, answer_relevance: str) -> str:
         index = DIFFICULTIES.index(current) if current in DIFFICULTIES else 0
         if not answered_question or answer_relevance == "none":
             return DIFFICULTIES[max(index - 1, 0)]
@@ -1042,7 +1043,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
         )
 
     @staticmethod
-    def _question_payload(turn: InterviewTurn | None) -> QuestionPayload | None:
+    def _question_payload(turn: Optional[InterviewTurn]) -> Optional[QuestionPayload]:
         if turn is None:
             return None
         return QuestionPayload(
@@ -1059,7 +1060,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
         interview: Interview,
         turn: InterviewTurn,
         evaluation: EvaluationResult,
-        next_question: QuestionPayload | None,
+        next_question: Optional[QuestionPayload],
         assessment_available: bool,
         acknowledgement: str = "",
         next_selection_reason: str = "",
@@ -1131,13 +1132,13 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
         return evaluation.next_focus or current_turn.subtopic or current_turn.topic or "the previous concept"
 
     @staticmethod
-    def _weakest_topic(records: list[InterviewTopicPerformance]) -> InterviewTopicPerformance | None:
+    def _weakest_topic(records: list[InterviewTopicPerformance]) -> Optional[InterviewTopicPerformance]:
         if not records:
             return None
         return min(records, key=lambda item: (item.average_score or 0.0, -(item.attempts or 0)))
 
     @staticmethod
-    def _first_json_item(raw: str | None) -> str:
+    def _first_json_item(raw: Optional[str]) -> str:
         items = InterviewService._json_list(raw)
         return items[0] if items else ""
 
@@ -1163,7 +1164,7 @@ Return strict JSON only with: question, difficulty, topic, subtopic, focus_area,
             return {"evaluation": raw}
 
     @staticmethod
-    def _json_list(raw: str | None) -> list[str]:
+    def _json_list(raw: Optional[str]) -> list[str]:
         if not raw:
             return []
         try:

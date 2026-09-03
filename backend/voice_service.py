@@ -5,12 +5,12 @@ import base64
 import os
 import threading
 import uuid
-from typing import Any
+from typing import Any, Optional, Union
 
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     import edge_tts  # type: ignore
@@ -25,7 +25,35 @@ except Exception:  # pragma: no cover - runtime dependency check
 
 class TTSRequest(BaseModel):
     text: str
-    turn_id: str | None = None
+    turn_id: Optional[str] = None
+
+
+class TTSSynthesizeRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    turn_id: Optional[str] = None
+
+
+class TTSWordBoundary(BaseModel):
+    text: str
+    start: float
+    duration: float
+
+
+class TTSPhonemeBoundary(BaseModel):
+    phoneme: str
+    start: float
+    duration: float
+
+
+class TTSSynthesizeResponse(BaseModel):
+    audio_base64: str
+    content_type: str
+    word_boundaries: list[TTSWordBoundary]
+    phoneme_boundaries: list[TTSPhonemeBoundary] = []
+
+
+class TTSSynthesisError(RuntimeError):
+    pass
 
 
 _DEVANAGARI = range(0x0900, 0x0980)
@@ -49,7 +77,7 @@ def detect_voice(text: str) -> str:
 
 
 class WhisperModelManager:
-    _instance: "WhisperModelManager | None" = None
+    _instance: Optional["WhisperModelManager"] = None
     _lock = threading.Lock()
 
     def __new__(cls):
@@ -94,7 +122,7 @@ class WhisperModelManager:
         return text.strip()
 
 
-_whisper_manager: WhisperModelManager | None = None
+_whisper_manager: Optional[WhisperModelManager] = None
 _whisper_lock = threading.Lock()
 
 
@@ -127,20 +155,20 @@ def _decode_pcm(data_b64: str, sample_rate: int) -> np.ndarray:
     return audio
 
 
-def _ticks_to_seconds(value: int | float | str | None) -> float:
+def _ticks_to_seconds(value: Union[int, float, str, None]) -> float:
     try:
         return float(value or 0) / 10_000_000.0
     except (TypeError, ValueError):
         return 0.0
 
 
-async def _synthesize_mp3_with_words(text: str, turn_id: str | None = None) -> tuple[bytes, list[dict[str, float | str]]]:
+async def _synthesize_mp3_with_words(text: str, turn_id: Optional[str] = None) -> tuple[bytes, list[dict[str, Union[float, str]]]]:
     if edge_tts is None:
         raise RuntimeError("edge_tts is not installed")
     voice = detect_voice((text or "").strip())
     communicate = edge_tts.Communicate(text, voice, boundary="WordBoundary")
     buffer = bytearray()
-    words: list[dict[str, float | str]] = []
+    words: list[dict[str, Union[float, str]]] = []
     async for chunk in communicate.stream():
         chunk_type = chunk.get("type")
         if chunk_type == "audio":
@@ -159,7 +187,35 @@ async def _synthesize_mp3_with_words(text: str, turn_id: str | None = None) -> t
     return bytes(buffer), words
 
 
-async def tts_response(text: str, turn_id: str | None = None) -> Response:
+async def synthesize_tts_bundle(text: str, turn_id: Optional[str] = None) -> TTSSynthesizeResponse:
+    value = (text or "").strip()
+    if not value:
+        raise ValueError("TTS text is required")
+    if len(value) > 4000:
+        raise ValueError("TTS text is too long")
+    try:
+        audio, words = await _synthesize_mp3_with_words(value, turn_id)
+    except Exception as exc:
+        raise TTSSynthesisError("TTS synthesis is unavailable") from exc
+    if not audio:
+        raise TTSSynthesisError("TTS synthesis returned no audio")
+    boundaries = [
+        TTSWordBoundary(
+            text=str(word["word"]),
+            start=float(word["start"]),
+            duration=float(word["duration"]),
+        )
+        for word in words
+    ]
+    return TTSSynthesizeResponse(
+        audio_base64=base64.b64encode(audio).decode("ascii"),
+        content_type="audio/mpeg",
+        word_boundaries=boundaries,
+        phoneme_boundaries=[],
+    )
+
+
+async def tts_response(text: str, turn_id: Optional[str] = None) -> Response:
     value = (text or "").strip()
     if not value:
         return Response(content=b"", media_type="audio/mpeg")
@@ -170,7 +226,7 @@ async def tts_response(text: str, turn_id: str | None = None) -> Response:
     return Response(content=audio, media_type="audio/mpeg")
 
 
-async def tts_metadata_response(text: str, turn_id: str | None = None) -> JSONResponse:
+async def tts_metadata_response(text: str, turn_id: Optional[str] = None) -> JSONResponse:
     value = (text or "").strip()
     if not value:
         return JSONResponse(content={"turn_id": turn_id, "words": []})
@@ -183,7 +239,7 @@ async def tts_metadata_response(text: str, turn_id: str | None = None) -> JSONRe
 
 async def ws_chat(websocket: WebSocket) -> None:
     await websocket.accept()
-    turn_id: str | None = None
+    turn_id: Optional[str] = None
 
     try:
         while True:
