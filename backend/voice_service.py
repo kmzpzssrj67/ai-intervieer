@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import threading
 import uuid
@@ -22,6 +23,11 @@ try:
 except Exception:  # pragma: no cover - runtime dependency check
     WhisperModel = None
 
+log = logging.getLogger("interviewer.voice")
+
+# Maximum seconds to wait for Whisper transcription before returning TIMEOUT.
+# Configurable via the STT_TIMEOUT_SECONDS environment variable.
+_STT_TIMEOUT_SECONDS: float = float(os.getenv("STT_TIMEOUT_SECONDS", "30"))
 
 class TTSRequest(BaseModel):
     text: str
@@ -252,6 +258,7 @@ async def ws_chat(websocket: WebSocket) -> None:
 
             if message_type in {"listening_start", "listening_end", "listening_cancel", "audio_end", "audio_start", "playback_done"}:
                 turn_id = message.get("turn_id") or turn_id
+                log.debug("lifecycle event=%r turn_id=%r", message_type, turn_id)
                 continue
 
             if message_type == "audio_pcm16":
@@ -259,25 +266,88 @@ async def ws_chat(websocket: WebSocket) -> None:
                 turn_id = current_turn
                 sample_rate = int(message.get("sample_rate", 16000) or 16000)
                 data = message.get("data", "")
+                log.debug("audio_pcm16 received turn_id=%r", current_turn)
+
                 if not data:
-                    await websocket.send_json({"type": "ignored", "text": "", "reason": "empty audio", "turn_id": current_turn})
+                    log.debug("audio_pcm16 empty payload turn_id=%r", current_turn)
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "empty audio",
+                        "recognition_status": "INVALID_AUDIO",
+                        "retryable": True,
+                        "turn_id": current_turn,
+                    })
                     continue
 
                 try:
                     audio = _decode_pcm(str(data), sample_rate)
-                except Exception:
-                    await websocket.send_json({"type": "ignored", "text": "", "reason": "decode_failed", "turn_id": current_turn})
+                except Exception as decode_exc:
+                    log.warning("audio_pcm16 decode failed turn_id=%r: %s", current_turn, decode_exc)
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "decode_failed",
+                        "recognition_status": "INVALID_AUDIO",
+                        "retryable": False,
+                        "turn_id": current_turn,
+                    })
                     continue
 
                 if not _has_real_speech(audio):
-                    await websocket.send_json({"type": "ignored", "text": "", "reason": "no_speech", "turn_id": current_turn})
+                    log.debug("audio_pcm16 silence detected turn_id=%r", current_turn)
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "no_speech",
+                        "recognition_status": "SILENCE",
+                        "retryable": True,
+                        "turn_id": current_turn,
+                    })
                     continue
 
-                stt = get_whisper_manager()
-                transcript = await asyncio.to_thread(stt.transcribe, audio)
+                log.debug("stt started turn_id=%r", current_turn)
+                try:
+                    stt = get_whisper_manager()
+                    transcript = await asyncio.wait_for(
+                        asyncio.to_thread(stt.transcribe, audio),
+                        timeout=_STT_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("stt timeout turn_id=%r after %.1fs", current_turn, _STT_TIMEOUT_SECONDS)
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "stt_timeout",
+                        "recognition_status": "TIMEOUT",
+                        "retryable": True,
+                        "turn_id": current_turn,
+                    })
+                    continue
+                except Exception as stt_exc:
+                    log.error("stt recognition error turn_id=%r: %s", current_turn, stt_exc)
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "recognition_error",
+                        "recognition_status": "RECOGNITION_ERROR",
+                        "retryable": False,
+                        "turn_id": current_turn,
+                    })
+                    continue
+
                 transcript = (transcript or "").strip()
+                log.debug("stt completed turn_id=%r text_len=%d", current_turn, len(transcript))
+
                 if not transcript:
-                    await websocket.send_json({"type": "ignored", "text": "", "reason": "empty_transcript", "turn_id": current_turn})
+                    await websocket.send_json({
+                        "type": "ignored",
+                        "text": "",
+                        "reason": "empty_transcript",
+                        "recognition_status": "EMPTY_TRANSCRIPT",
+                        "retryable": True,
+                        "turn_id": current_turn,
+                    })
                     continue
 
                 await websocket.send_json({"type": "transcript", "text": transcript, "turn_id": current_turn})
@@ -295,6 +365,7 @@ async def ws_chat(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         return
     except Exception as exc:  # pragma: no cover - websocket safety
+        log.error("ws_chat unhandled exception turn_id=%r: %s", turn_id, exc)
         try:
             await websocket.send_json({"type": "error", "message": str(exc), "turn_id": turn_id})
         except Exception:
