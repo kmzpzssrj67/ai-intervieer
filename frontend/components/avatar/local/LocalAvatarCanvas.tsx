@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import type { AvatarState } from "../../types";
 import type { AudioPlaybackController } from "./AudioPlaybackController";
+import { BlinkController } from "./BlinkController";
+import { compositeEyes, EYE_CONFIG } from "./EyeMask";
 import { findVisemeAtTime, type LocalViseme, type VisemeEvent, VISEMES } from "./LipSyncTimeline";
 import { MOUTH_MASK } from "./MouthMask";
 import { compositeVisemes, type VisemeRenderState } from "./VisemeCompositor";
@@ -52,9 +54,10 @@ const SILENCE = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ImageBundle = {
-  idle:     HTMLImageElement;
-  thinking: HTMLImageElement;
-  visemes:  Record<LocalViseme, HTMLImageElement>;
+  idle:       HTMLImageElement;
+  thinking:   HTMLImageElement;
+  eyesClosed: HTMLImageElement;
+  visemes:    Record<LocalViseme, HTMLImageElement>;
 };
 
 type CanvasCache = {
@@ -106,11 +109,20 @@ export default function LocalAvatarCanvas({
   // Canvas displayed to the user.
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   // Offscreen Canvas 1: full-frame buffer (1254x1254) for atomic blitting to visible canvas.
   const fullFrameCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Offscreen Canvas 2: mouth-only work buffer (1254x1254) for blending and feather-masking.
   const mouthCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Offscreen Canvas 3: eye-only work buffer (1254x1254) for blinking feather-masking.
+  const eyeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Blink controller for natural timing and eyelid easing.
+  const blinkControllerRef = useRef<BlinkController>(new BlinkController());
 
   // All decoded images — set once after preload, stable for component lifetime.
   const imagesRef = useRef<ImageBundle | null>(null);
@@ -162,16 +174,17 @@ export default function LocalAvatarCanvas({
     void Promise.all([
       loadAndDecodeImage("/avatar/idle.png", "idle"),
       loadAndDecodeImage("/avatar/thinking.png", "thinking"),
+      loadAndDecodeImage("/avatar/eyes/closed.png", "eyesClosed"),
       ...VISEMES.map((v) => loadAndDecodeImage(ASSET_PATHS[v], v)),
     ]).then((results) => {
       if (cancelled) return;
-      const [idle, thinking, ...visemeImages] = results;
+      const [idle, thinking, eyesClosed, ...visemeImages] = results;
       const visemes = Object.fromEntries(
         VISEMES.map((v, i) => [v, visemeImages[i]]),
       ) as Record<LocalViseme, HTMLImageElement>;
-      imagesRef.current = { idle, thinking, visemes };
+      imagesRef.current = { idle, thinking, eyesClosed, visemes };
 
-      // Initialize offscreen frame and mouth work canvases once.
+      // Initialize offscreen frame, mouth, and eye work canvases once.
       if (!fullFrameCanvasRef.current) {
         const fc = document.createElement("canvas");
         fc.width  = MOUTH_MASK.sourceWidth;
@@ -184,8 +197,14 @@ export default function LocalAvatarCanvas({
         mc.height = MOUTH_MASK.sourceHeight;
         mouthCanvasRef.current = mc;
       }
+      if (!eyeCanvasRef.current) {
+        const ec = document.createElement("canvas");
+        ec.width  = EYE_CONFIG.sourceWidth;
+        ec.height = EYE_CONFIG.sourceHeight;
+        eyeCanvasRef.current = ec;
+      }
 
-      drawFrame();
+      drawFrame(0);
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
@@ -245,8 +264,49 @@ export default function LocalAvatarCanvas({
         previousViseme: "mbp", currentViseme: "mbp",
         transitionStartedAt: 0, transitionDurationMs: POSE_CONFIG.TRANSITION_MS, intensity: 0,
       };
-      drawFrame();
-      return;
+
+      // In "thinking" state: strictly NO blinking.
+      // Reset blink controller schedule so leaving thinking schedules a clean ~3s delay.
+      if (state === "thinking") {
+        blinkControllerRef.current.cancelBlink(performance.now());
+        drawFrame(0);
+        return () => {
+          generationRef.current += 1;
+          if (frameRef.current !== null) {
+            cancelAnimationFrame(frameRef.current);
+            frameRef.current = null;
+          }
+        };
+      }
+
+      // In "idle" state: normal natural blinking (~3s interval)
+      const myGeneration = generationRef.current;
+      let wasBlinking = false;
+
+      const idleTick = () => {
+        if (generationRef.current !== myGeneration) return;
+
+        const nowMs = performance.now();
+        const blinkOpacity = blinkControllerRef.current.getBlinkProgress(nowMs);
+        const isBlinkingNow = blinkOpacity > 0.001;
+
+        if (isBlinkingNow || wasBlinking) {
+          drawFrame(blinkOpacity);
+          wasBlinking = isBlinkingNow;
+        }
+
+        frameRef.current = requestAnimationFrame(idleTick);
+      };
+
+      drawFrame(0);
+      frameRef.current = requestAnimationFrame(idleTick);
+      return () => {
+        generationRef.current += 1;
+        if (frameRef.current !== null) {
+          cancelAnimationFrame(frameRef.current);
+          frameRef.current = null;
+        }
+      };
     }
 
     // New utterance — reset state and capture generation.
@@ -288,18 +348,25 @@ export default function LocalAvatarCanvas({
 
   // ── drawFrame: for non-speaking frames (idle, thinking) ───────────────────
   // Double-buffered: builds on offscreen frameCanvas, then single blit to visible canvas.
-  function drawFrame(): void {
+  function drawFrame(blinkOpacity: number = 0): void {
     const canvas    = canvasRef.current;
     const images    = imagesRef.current;
     const fullFrame = fullFrameCanvasRef.current;
+    const eyeWork   = eyeCanvasRef.current;
     if (!canvas || !images || !fullFrame) return;
 
     const fullCtx = fullFrame.getContext("2d");
     const ctx     = canvas.getContext("2d");
     if (!fullCtx || !ctx) return;
 
-    const baseImg = state === "thinking" ? images.thinking : images.idle;
+    const currentState = stateRef.current;
+    const baseImg = currentState === "thinking" ? images.thinking : images.idle;
     fullCtx.drawImage(baseImg, 0, 0, MOUTH_MASK.sourceWidth, MOUTH_MASK.sourceHeight);
+
+    // If blinking (and not thinking), composite closed eyes onto fullFrame before blit
+    if (currentState !== "thinking" && blinkOpacity > 0.001 && eyeWork && images.eyesClosed) {
+      compositeEyes(fullCtx, eyeWork, images.eyesClosed, blinkOpacity, EYE_CONFIG);
+    }
 
     // Atomic blit to visible canvas without progressive clear.
     ctx.drawImage(fullFrame, 0, 0, canvas.width, canvas.height);
@@ -401,6 +468,13 @@ export default function LocalAvatarCanvas({
     // ── Full-frame double-buffered composition ────────────────────────────
     // Step 1: Draw base idle face to offscreen frame canvas.
     fullCtx.drawImage(images.idle, 0, 0, MOUTH_MASK.sourceWidth, MOUTH_MASK.sourceHeight);
+
+    // Step 1.5: If blinking during speech, composite closed eyes onto face
+    const blinkOpacity = blinkControllerRef.current.getBlinkProgress(nowMs);
+    const eyeWork      = eyeCanvasRef.current;
+    if (blinkOpacity > 0.001 && eyeWork && images.eyesClosed) {
+      compositeEyes(fullCtx, eyeWork, images.eyesClosed, blinkOpacity, EYE_CONFIG);
+    }
 
     // Step 2: Composite masked blended mouth on top of idle face in offscreen frame.
     compositeVisemes(fullCtx, mouthWork, images.visemes, renderState, audioTime);
